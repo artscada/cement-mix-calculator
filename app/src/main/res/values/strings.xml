@@ -1,0 +1,33 @@
+<resources>
+    <string name="app_name">Цемент на замес</string>
+    <string name="subtitle">Простой расчёт цемента и контроль показаний весов для каждого замеса.</string>
+    <string name="label_grade">Марка</string>
+    <string name="label_cement_per_batch">Кг на 0,5 м3</string>
+    <string name="label_total_volume">Общее количество, м3</string>
+    <string name="label_batch_count">План замесов</string>
+    <string name="label_start_weight">Начальные показания весов, кг</string>
+    <string name="action_calculate">Рассчитать</string>
+    <string name="action_save">Сохранить</string>
+    <string name="recipe_hint">Кнопка сохраняет рецепт только для выбранной марки. Поле кг можно менять для разового перерасчёта без сохранения.</string>
+    <string name="summary_title">Итог</string>
+    <string name="list_title">План по замесам</string>
+    <string name="summary_waiting">Введите параметры и нажмите «Рассчитать».</string>
+    <string name="list_waiting">После расчёта здесь появятся кнопки с нужным весом для каждого замеса.</string>
+    <string name="status_ready">Цемента хватает на все замесы</string>
+    <string name="status_not_enough">Внимание: цемента не хватает</string>
+    <string name="error_positive_number">Введите число больше нуля</string>
+    <string name="error_non_negative_number">Введите число от нуля и больше</string>
+    <string name="batch_count_hint_default">План появится после расчёта.</string>
+    <string name="batch_count_formula_default">Используется шаг 0,5 м3 и отдельный догруз для остатка.</string>
+    <string name="batch_count_formula">Всего циклов: %1$d</string>
+    <string name="batch_plan_full_only">%1$d x 0,5 м3</string>
+    <string name="batch_plan_with_partial">%1$d x 0,5 м3 + догруз %2$s м3</string>
+    <string name="batch_plan_partial_only">Только догруз %1$s м3</string>
+    <string name="recipe_saved">Сохранено для %1$s: %2$s кг</string>
+    <string name="completed_batch_label">Замес %1$d</string>
+    <string name="completed_batch_volume">%1$s м3</string>
+    <string name="elapsed_from_calculation">От расчёта: %1$s</string>
+    <string name="elapsed_from_previous">С прошлого замеса: %1$s</string>
+    <string name="elapsed_total">Итого: %1$s</string>
+    <string name="total_elapsed_footer">Общее время по последнему отмеченному замесу: %1$s</string>
+</resources>

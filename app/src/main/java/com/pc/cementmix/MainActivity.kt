@@ -2,10 +2,13 @@ package com.pc.cementmix
 
 import android.graphics.Paint
 import android.graphics.Typeface
+import android.content.Context
+import android.content.res.Configuration
 import android.os.Bundle
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
+import android.view.inputmethod.InputMethodManager
 import android.widget.ArrayAdapter
 import android.widget.FrameLayout
 import android.widget.LinearLayout
@@ -20,6 +23,18 @@ import java.util.Locale
 import kotlin.math.ceil
 import kotlin.math.floor
 import kotlin.math.round
+import java.io.File
+import java.io.FileWriter
+import java.io.BufferedWriter
+import java.text.SimpleDateFormat
+import java.util.Date
+import android.content.Intent
+import androidx.core.content.FileProvider
+import android.content.ContentValues
+import android.provider.MediaStore
+import android.os.Environment
+import android.os.Build
+
 
 class MainActivity : AppCompatActivity() {
 
@@ -37,6 +52,10 @@ class MainActivity : AppCompatActivity() {
     private var currentPlanItems: List<BatchPlanItem> = emptyList()
     private val completionTimes = linkedMapOf<Int, Long>()
     private var calculationStartedAt: Long = 0L
+
+    private var useAsh = false
+    private var currentLogFile: File? = null
+    private var lastLogFile: File? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -72,6 +91,8 @@ class MainActivity : AppCompatActivity() {
         if (binding.cementPerBatchInput.text.isNullOrBlank()) {
             binding.cementPerBatchInput.setText(formatEditable(DEFAULT_CEMENT_PER_FULL_BATCH))
         }
+
+        updateAshToggleButtonUI()
     }
 
     private fun setupActions() {
@@ -81,6 +102,30 @@ class MainActivity : AppCompatActivity() {
 
         binding.calculateButton.setOnClickListener {
             calculate()
+        }
+
+        binding.ashToggleButton.setOnClickListener {
+            useAsh = !useAsh
+            updateAshToggleButtonUI()
+            calculate()
+        }
+
+        binding.shareLogButton.setOnClickListener {
+            shareLogFile()
+        }
+    }
+
+    private fun updateAshToggleButtonUI() {
+        if (useAsh) {
+            binding.ashToggleButton.setBackgroundColor(getColor(R.color.black))
+            binding.ashToggleButton.setTextColor(getColor(R.color.white))
+            binding.ashToggleButton.setText(R.string.action_with_ash)
+            binding.ashToggleButton.strokeColor = android.content.res.ColorStateList.valueOf(getColor(R.color.black))
+        } else {
+            binding.ashToggleButton.setBackgroundColor(getColor(android.R.color.transparent))
+            binding.ashToggleButton.setTextColor(getColor(R.color.text_primary))
+            binding.ashToggleButton.setText(R.string.action_without_ash)
+            binding.ashToggleButton.strokeColor = android.content.res.ColorStateList.valueOf(getColor(R.color.card_stroke))
         }
     }
 
@@ -113,6 +158,10 @@ class MainActivity : AppCompatActivity() {
 
     private fun loadRecipeForGrade(grade: String): Double? {
         return recipesPreferences.getString(recipeKey(grade), null)?.toDoubleOrNull()
+    }
+
+    private fun isAshBatchIndex(index: Int): Boolean {
+        return index == 1 || index == 6 || index == 11 || index == 16
     }
 
     private fun calculate() {
@@ -148,6 +197,7 @@ class MainActivity : AppCompatActivity() {
             binding.batchCountHintView.text = getString(R.string.batch_count_formula_default)
             binding.totalElapsedView.visibility = View.GONE
             binding.summaryView.text = getString(R.string.summary_waiting)
+            binding.shareLogButton.visibility = View.GONE
             return
         }
 
@@ -164,19 +214,37 @@ class MainActivity : AppCompatActivity() {
             0.0
         }
         val totalCycles = fullBatchCount + if (hasPartialBatch) 1 else 0
-        val totalCement = safeCementPerBatch * fullBatchCount + partialCement
-        val finalWeight = safeStartWeight - totalCement
+
+        val totalCementRaw = safeCementPerBatch * fullBatchCount + partialCement
+        val totalAshRaw = if (useAsh) totalCementRaw * 0.18 else 0.0
+
+        val ashBatchesCount = if (useAsh) (1..totalCycles).count { isAshBatchIndex(it) } else 0
+        val cementBatchesCount = totalCycles - ashBatchesCount
+
+        val ashPerBatch = if (useAsh && ashBatchesCount > 0) ceilTo10(totalAshRaw / ashBatchesCount) else 0.0
+        val cementPerBatchFinal = if (useAsh) {
+            if (cementBatchesCount > 0) ceilTo10(totalCementRaw / cementBatchesCount) else 0.0
+        } else {
+            safeCementPerBatch
+        }
+
+        val totalCementUsed = if (useAsh) cementPerBatchFinal * cementBatchesCount else totalCementRaw
+        val finalWeight = safeStartWeight - totalCementUsed
         val enoughCement = finalWeight >= 0.0
 
         currentPlanItems = buildPlanItems(
             startWeight = safeStartWeight,
-            fullBatchCount = fullBatchCount,
+            totalCycles = totalCycles,
             cementPerFullBatch = safeCementPerBatch,
             partialVolume = partialVolume,
             partialCement = partialCement
         )
         completionTimes.clear()
         calculationStartedAt = System.currentTimeMillis()
+
+        startLogSession(grade, safeTotalVolume, safeStartWeight)
+        binding.shareLogButton.visibility = View.VISIBLE
+
         renderBatchButtons()
 
         binding.batchPlanView.text = describePlan(fullBatchCount, partialVolume)
@@ -185,15 +253,31 @@ class MainActivity : AppCompatActivity() {
 
         binding.summaryView.text = buildString {
             appendLine("Марка: $grade")
-            appendLine("Полный замес 0,5 м3: ${format(safeCementPerBatch)} кг цемента")
+            if (useAsh) {
+                appendLine(getString(R.string.summary_ash_total, format(totalAshRaw)))
+                appendLine(getString(R.string.summary_ash_per_batch, format(ashPerBatch), ashBatchesCount))
+                appendLine(getString(R.string.summary_cement_per_batch, format(cementPerBatchFinal), cementBatchesCount))
+            } else {
+                appendLine("Полный замес 0,5 м3: ${format(safeCementPerBatch)} кг цемента")
+            }
             appendLine("Общий объём: ${format(safeTotalVolume)} м3")
             appendLine("План замесов: ${describePlan(fullBatchCount, partialVolume)}")
             if (hasPartialBatch) {
-                appendLine("Догруз: ${format(partialVolume)} м3 = ${format(partialCement)} кг")
+                appendLine("Догруз: ${format(partialVolume)} м3 = ${format(if (useAsh) 0.0 else partialCement)} кг")
             }
             appendLine("Всего циклов: $totalCycles")
-            appendLine("Всего цемента нужно: ${format(totalCement)} кг")
+            if (useAsh) {
+                val totalAshUsed = ashPerBatch * ashBatchesCount
+                appendLine("Всего цемента нужно: ${format(totalCementUsed)} кг")
+                appendLine("Всего золы нужно: ${format(totalAshUsed)} кг")
+            } else {
+                appendLine("Всего цемента нужно: ${format(totalCementRaw)} кг")
+            }
             append("Остаток после последнего замеса: ${format(finalWeight)} кг")
+            if (currentPlanItems.size > MAX_VISIBLE_BATCHES) {
+                appendLine()
+                append(getString(R.string.list_overflow_notice))
+            }
         }
 
         binding.statusView.text = if (enoughCement) {
@@ -203,11 +287,13 @@ class MainActivity : AppCompatActivity() {
         }
         val statusColor = if (enoughCement) R.color.success else R.color.danger
         binding.statusView.setTextColor(getColor(statusColor))
+
+        hideKeyboard()
     }
 
     private fun buildPlanItems(
         startWeight: Double,
-        fullBatchCount: Int,
+        totalCycles: Int,
         cementPerFullBatch: Double,
         partialVolume: Double,
         partialCement: Double
@@ -215,27 +301,47 @@ class MainActivity : AppCompatActivity() {
         val items = mutableListOf<BatchPlanItem>()
         var currentWeight = startWeight
 
-        for (index in 1..fullBatchCount) {
-            currentWeight -= cementPerFullBatch
+        val totalCementRaw = cementPerFullBatch * (totalCycles - if (partialVolume > EPSILON) 1 else 0) + (if (partialVolume > EPSILON) partialCement else 0.0)
+        val totalAsh = if (useAsh) totalCementRaw * 0.18 else 0.0
+
+        val ashBatchesCount = if (useAsh) (1..totalCycles).count { isAshBatchIndex(it) } else 0
+        val cementBatchesCount = totalCycles - ashBatchesCount
+
+        val ashPerBatch = if (useAsh && ashBatchesCount > 0) ceilTo10(totalAsh / ashBatchesCount) else 0.0
+        val cementPerBatchFinal = if (useAsh) {
+            if (cementBatchesCount > 0) ceilTo10(totalCementRaw / cementBatchesCount) else 0.0
+        } else {
+            cementPerFullBatch
+        }
+
+        for (index in 1..totalCycles) {
+            val isPartial = index == totalCycles && partialVolume > EPSILON
+            val isAsh = useAsh && isAshBatchIndex(index)
+            val volume = if (isPartial) partialVolume else FULL_BATCH_VOLUME
+
+            val cementUsed = if (isAsh) {
+                0.0
+            } else {
+                if (useAsh) {
+                    cementPerBatchFinal
+                } else {
+                    if (isPartial) partialCement else cementPerFullBatch
+                }
+            }
+
+            val ashUsed = if (isAsh) ashPerBatch else 0.0
+
+            currentWeight -= cementUsed
+
             items += BatchPlanItem(
                 id = index,
                 targetWeight = currentWeight,
-                volume = FULL_BATCH_VOLUME,
-                cumulativeVolume = roundVolume(index * FULL_BATCH_VOLUME),
-                cement = cementPerFullBatch,
-                isPartial = false
-            )
-        }
-
-        if (partialVolume > EPSILON) {
-            currentWeight -= partialCement
-            items += BatchPlanItem(
-                id = items.size + 1,
-                targetWeight = currentWeight,
-                volume = partialVolume,
-                cumulativeVolume = roundVolume(fullBatchCount * FULL_BATCH_VOLUME + partialVolume),
-                cement = partialCement,
-                isPartial = true
+                volume = volume,
+                cumulativeVolume = roundVolume(items.sumOf { it.volume } + volume),
+                cement = cementUsed,
+                isPartial = isPartial,
+                isAsh = isAsh,
+                ash = ashUsed
             )
         }
 
@@ -245,113 +351,179 @@ class MainActivity : AppCompatActivity() {
     private fun renderBatchButtons() {
         binding.batchButtonsContainer.removeAllViews()
 
-        if (currentPlanItems.isEmpty()) {
-            val emptyView = TextView(this).apply {
-                text = getString(R.string.list_waiting)
-                setTextColor(getColor(R.color.text_secondary))
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
-            }
-            binding.batchButtonsContainer.addView(emptyView)
+        if (shouldShowTwoColumns()) {
+            renderBatchButtonsAsTwoColumns()
             return
         }
 
-        currentPlanItems.forEachIndexed { index, item ->
-            val wrapper = LinearLayout(this).apply {
-                orientation = LinearLayout.VERTICAL
-                layoutParams = LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT,
-                    LinearLayout.LayoutParams.WRAP_CONTENT
-                ).apply {
-                    if (index > 0) topMargin = dp(12)
-                }
-            }
-
-            val buttonFrame = FrameLayout(this).apply {
-                layoutParams = LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT,
-                    dp(76)
-                )
-            }
-
-            val button = MaterialButton(this).apply {
-                layoutParams = FrameLayout.LayoutParams(
-                    FrameLayout.LayoutParams.MATCH_PARENT,
-                    FrameLayout.LayoutParams.MATCH_PARENT
-                )
-                text = ""
-                insetTop = 0
-                insetBottom = 0
-                cornerRadius = dp(20)
-                strokeWidth = dp(1)
-                setOnClickListener { toggleBatch(item.id) }
-            }
-
-            val weightView = TextView(this).apply {
-                layoutParams = FrameLayout.LayoutParams(
-                    FrameLayout.LayoutParams.WRAP_CONTENT,
-                    FrameLayout.LayoutParams.WRAP_CONTENT,
-                    Gravity.CENTER
-                )
-                text = weightLabel(item.targetWeight)
-                setTextColor(getColor(R.color.white))
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 28f)
-                setTypeface(Typeface.DEFAULT_BOLD)
-                translationX = dp(34).toFloat()
-            }
-
-            val batchMetaView = TextView(this).apply {
-                layoutParams = FrameLayout.LayoutParams(
-                    FrameLayout.LayoutParams.WRAP_CONTENT,
-                    FrameLayout.LayoutParams.WRAP_CONTENT,
-                    Gravity.TOP or Gravity.START
-                ).apply {
-                    leftMargin = dp(12)
-                    topMargin = dp(8)
-                }
-                setTextColor(getColor(R.color.text_secondary))
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
-                setTypeface(Typeface.DEFAULT_BOLD)
-                setLineSpacing(1f, 1f)
-                visibility = View.GONE
-            }
-
-            val volumeMetaView = TextView(this).apply {
-                layoutParams = FrameLayout.LayoutParams(
-                    FrameLayout.LayoutParams.WRAP_CONTENT,
-                    FrameLayout.LayoutParams.WRAP_CONTENT,
-                    Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
-                ).apply {
-                    bottomMargin = dp(8)
-                }
-                setTextColor(getColor(R.color.text_secondary))
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
-                setTypeface(Typeface.DEFAULT_BOLD)
-                visibility = View.GONE
-            }
-
-            val timeView = TextView(this).apply {
-                layoutParams = LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT,
-                    LinearLayout.LayoutParams.WRAP_CONTENT
-                ).apply {
-                    topMargin = dp(6)
-                    leftMargin = dp(6)
-                }
-                setTextColor(getColor(R.color.text_secondary))
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
-                visibility = View.GONE
-            }
-
-            buttonFrame.addView(button)
-            buttonFrame.addView(weightView)
-            buttonFrame.addView(batchMetaView)
-            buttonFrame.addView(volumeMetaView)
-            wrapper.addView(buttonFrame)
-            wrapper.addView(timeView)
+        val count = currentPlanItems.size
+        for (slotIndex in 1..count) {
+            val item = currentPlanItems[slotIndex - 1]
+            val views = buildBatchItemView(slotIndex, item)
+            val wrapper = views.root
             binding.batchButtonsContainer.addView(wrapper)
 
-            bindBatchButton(button, weightView, batchMetaView, volumeMetaView, timeView, item)
+            bindBatchButton(
+                views.button,
+                views.weightView,
+                views.batchMetaView,
+                views.volumeMetaView,
+                views.timeView,
+                item
+            )
         }
+    }
+
+    private fun renderBatchButtonsAsTwoColumns() {
+        val leftColumn = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(
+                0,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                1f
+            )
+        }
+
+        val rightColumn = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(
+                0,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                1f
+            ).apply {
+                leftMargin = dp(12)
+            }
+        }
+
+        binding.batchButtonsContainer.addView(leftColumn)
+        binding.batchButtonsContainer.addView(rightColumn)
+
+        val count = currentPlanItems.size
+        val leftColumnItemsCount = ceil(count / 2.0).toInt()
+
+        for (slotIndex in 1..count) {
+            val item = currentPlanItems[slotIndex - 1]
+            val views = buildBatchItemView(slotIndex, item, portraitMode = true)
+            val targetColumn = if (slotIndex <= leftColumnItemsCount) leftColumn else rightColumn
+            targetColumn.addView(views.root)
+
+            bindBatchButton(
+                views.button,
+                views.weightView,
+                views.batchMetaView,
+                views.volumeMetaView,
+                views.timeView,
+                item,
+                portraitMode = true
+            )
+        }
+    }
+
+    private fun buildBatchItemView(
+        slotIndex: Int,
+        item: BatchPlanItem,
+        portraitMode: Boolean = false
+    ): BatchItemViews {
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                if (!portraitMode && slotIndex > 1) topMargin = dp(12)
+                if (portraitMode) bottomMargin = dp(12)
+            }
+        }
+
+        val buttonFrame = FrameLayout(this).apply {
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                dp(76)
+            )
+        }
+
+        val button = MaterialButton(this).apply {
+            layoutParams = FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+            )
+            text = ""
+            insetTop = 0
+            insetBottom = 0
+            cornerRadius = dp(20)
+            strokeWidth = dp(1)
+            isEnabled = true
+            setOnClickListener { toggleBatch(item.id) }
+        }
+
+        val weightView = TextView(this).apply {
+            layoutParams = FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                Gravity.END or Gravity.CENTER_VERTICAL
+            ).apply {
+                rightMargin = dp(14)
+            }
+            text = weightLabel(item.targetWeight)
+            setTextColor(getColor(R.color.white))
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 28f)
+            setTypeface(Typeface.DEFAULT_BOLD)
+            translationX = 0f
+        }
+
+        val detailsContainer = LinearLayout(this).apply {
+            layoutParams = FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                Gravity.START or Gravity.CENTER_VERTICAL
+            ).apply {
+                leftMargin = dp(10)
+                rightMargin = dp(76)
+            }
+            orientation = LinearLayout.VERTICAL
+        }
+
+        val batchMetaView = TextView(this).apply {
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 22f)
+            setTypeface(Typeface.DEFAULT_BOLD)
+            includeFontPadding = false
+        }
+
+        val timeView = TextView(this).apply {
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 22f)
+            setTypeface(Typeface.DEFAULT_BOLD)
+            includeFontPadding = false
+            visibility = View.GONE
+        }
+
+        val volumeMetaView = TextView(this).apply {
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 22f)
+            setTypeface(Typeface.DEFAULT_BOLD)
+            includeFontPadding = false
+            visibility = View.GONE
+        }
+
+        val textColor = if (item.isAsh) getColor(R.color.white) else getColor(R.color.text_secondary)
+        batchMetaView.setTextColor(textColor)
+        timeView.setTextColor(textColor)
+        volumeMetaView.setTextColor(textColor)
+
+        detailsContainer.addView(batchMetaView)
+        detailsContainer.addView(timeView)
+        detailsContainer.addView(volumeMetaView)
+
+        buttonFrame.addView(button)
+        buttonFrame.addView(weightView)
+        buttonFrame.addView(detailsContainer)
+        root.addView(buttonFrame)
+
+        return BatchItemViews(root, button, weightView, batchMetaView, volumeMetaView, timeView)
+    }
+
+    private fun shouldShowTwoColumns(): Boolean {
+        val smallestWidth = resources.configuration.smallestScreenWidthDp
+        val isLandscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+        return smallestWidth >= 600 || isLandscape
     }
 
     private fun bindBatchButton(
@@ -360,49 +532,61 @@ class MainActivity : AppCompatActivity() {
         batchMetaView: TextView,
         volumeMetaView: TextView,
         timeView: TextView,
-        item: BatchPlanItem
+        item: BatchPlanItem,
+        portraitMode: Boolean = false
     ) {
         val completedAt = completionTimes[item.id]
+        
+        val completedFillColor = if (item.isAsh) getColor(R.color.ash_completed_fill) else getColor(R.color.completed_fill)
+        val completedStrokeColor = if (item.isAsh) getColor(R.color.ash_completed_stroke) else getColor(R.color.completed_stroke)
+        val normalFillColor = if (item.isAsh) getColor(R.color.black) else getColor(R.color.primary)
+        val normalStrokeColor = if (item.isAsh) getColor(R.color.black) else getColor(R.color.primary_dark)
+        
+        val textColorNormal = if (item.isAsh) getColor(R.color.white) else getColor(R.color.text_secondary)
+        val textColorCompleted = if (item.isAsh) getColor(R.color.white) else getColor(R.color.text_primary)
+
         if (completedAt != null) {
-            button.alpha = 0.7f
-            button.setBackgroundColor(getColor(R.color.completed_fill))
-            button.strokeColor = android.content.res.ColorStateList.valueOf(getColor(R.color.completed_stroke))
+            button.alpha = if (item.isAsh) 0.6f else 0.7f
+            button.setBackgroundColor(completedFillColor)
+            button.strokeColor = android.content.res.ColorStateList.valueOf(completedStrokeColor)
+            
             weightView.paintFlags = weightView.paintFlags or Paint.STRIKE_THRU_TEXT_FLAG
-            weightView.setTextColor(getColor(R.color.text_primary))
+            weightView.setTextColor(textColorCompleted)
+            weightView.setTextSize(TypedValue.COMPLEX_UNIT_SP, if (portraitMode) 17f else 19f)
+            weightView.translationX = 0f
+            
             batchMetaView.visibility = View.VISIBLE
-            batchMetaView.text = getString(
-                R.string.completed_batch_label,
-                item.id
-            )
+            batchMetaView.text = getString(R.string.completed_batch_label, item.id)
+            batchMetaView.setTextColor(textColorCompleted)
+            
             volumeMetaView.visibility = View.VISIBLE
             volumeMetaView.text = getString(R.string.completed_batch_volume, format(item.cumulativeVolume))
+            volumeMetaView.setTextColor(textColorCompleted)
 
             val previousTime = previousCompletionTime(item.id) ?: calculationStartedAt
             val interval = completedAt - previousTime
-            val isLatestCompleted = completionTimes.keys.lastOrNull() == item.id
 
             timeView.visibility = View.VISIBLE
-            timeView.text = buildString {
-                append(
-                    if (previousCompletionTime(item.id) == null) {
-                        getString(R.string.elapsed_from_calculation, formatDuration(interval))
-                    } else {
-                        getString(R.string.elapsed_from_previous, formatDuration(interval))
-                    }
-                )
-                if (isLatestCompleted) {
-                    appendLine()
-                    append(getString(R.string.elapsed_total, formatDuration(completedAt - calculationStartedAt)))
-                }
-            }
+            timeView.text = formatDuration(interval)
+            timeView.setTextColor(textColorCompleted)
         } else {
             button.alpha = 1f
-            button.setBackgroundColor(getColor(R.color.primary))
-            button.strokeColor = android.content.res.ColorStateList.valueOf(getColor(R.color.primary_dark))
+            button.setBackgroundColor(normalFillColor)
+            button.strokeColor = android.content.res.ColorStateList.valueOf(normalStrokeColor)
+            
             weightView.paintFlags = weightView.paintFlags and Paint.STRIKE_THRU_TEXT_FLAG.inv()
             weightView.setTextColor(getColor(R.color.white))
-            batchMetaView.visibility = View.GONE
-            batchMetaView.text = ""
+            weightView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 28f)
+            weightView.translationX = 0f
+            
+            batchMetaView.visibility = View.VISIBLE
+            if (item.isAsh) {
+                batchMetaView.text = getString(R.string.label_ash_batch, format(item.ash))
+            } else {
+                batchMetaView.text = getString(R.string.label_cement_batch, format(item.cement))
+            }
+            batchMetaView.setTextColor(textColorNormal)
+            
             volumeMetaView.visibility = View.GONE
             volumeMetaView.text = ""
             timeView.visibility = View.GONE
@@ -410,6 +594,159 @@ class MainActivity : AppCompatActivity() {
         }
 
         updateTotalElapsedView()
+    }
+
+    private fun startLogSession(grade: String, totalVolume: Double, startWeight: Double) {
+        try {
+            val directory = File(filesDir, "Logs")
+            if (!directory.exists()) {
+                directory.mkdirs()
+            }
+            val timestamp = SimpleDateFormat("yyyy-MM-dd_HH-mm-ss", Locale.US).format(Date())
+            val file = File(directory, "замес_$timestamp.txt")
+            currentLogFile = file
+            lastLogFile = file
+
+            val writer = FileWriter(file, true)
+            val bufferedWriter = BufferedWriter(writer)
+            
+            val formattedDate = SimpleDateFormat("dd.MM.yyyy HH:mm:ss", Locale.getDefault()).format(Date())
+            bufferedWriter.write("=== НАЧАЛО РАСЧЕТА СЕССИИ ===\n")
+            bufferedWriter.write("Дата и время: $formattedDate\n")
+            bufferedWriter.write("Марка смеси: $grade\n")
+            bufferedWriter.write("Общий объем: ${format(totalVolume)} м3\n")
+            bufferedWriter.write("Начальный вес на весах: ${format(startWeight)} кг\n")
+            if (useAsh) {
+                bufferedWriter.write("Режим: С ЗОЛОЙ (18%)\n")
+            } else {
+                bufferedWriter.write("Режим: БЕЗ ЗОЛЫ\n")
+            }
+            bufferedWriter.write("--------------------------------------------------\n")
+            bufferedWriter.close()
+            
+            Toast.makeText(this, "Создан лог-файл: ${file.name}", Toast.LENGTH_SHORT).show()
+        } catch (e: Exception) {
+            e.printStackTrace()
+            Toast.makeText(this, "Ошибка создания лога: ${e.message}", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun logBatchEvent(item: BatchPlanItem, completed: Boolean) {
+        val file = currentLogFile ?: return
+        try {
+            val writer = FileWriter(file, true)
+            val bufferedWriter = BufferedWriter(writer)
+            val timestamp = SimpleDateFormat("dd.MM.yyyy HH:mm:ss", Locale.getDefault()).format(Date())
+            
+            val typeStr = if (item.isAsh) "ЗОЛА" else "ЦЕМЕНТ"
+            val weightStr = if (item.isAsh) format(item.ash) else format(item.cement)
+            val statusStr = if (completed) "ВЫПОЛНЕН" else "ОТМЕНЕН"
+            
+            val logLine = "$timestamp - Замес ${item.id} ($typeStr): $weightStr кг. Статус: $statusStr. Весы цемента: ${format(item.targetWeight)} кг.\n"
+            bufferedWriter.write(logLine)
+            bufferedWriter.close()
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    private fun finishLogSession() {
+        val file = currentLogFile ?: return
+        try {
+            val writer = FileWriter(file, true)
+            val bufferedWriter = BufferedWriter(writer)
+            val timestamp = SimpleDateFormat("dd.MM.yyyy HH:mm:ss", Locale.getDefault()).format(Date())
+            
+            bufferedWriter.write("--------------------------------------------------\n")
+            bufferedWriter.write("=== КОНЕЦ СЕССИИ: ВСЕ ЗАМЕСЫ ВЫПОЛНЕНЫ ===\n")
+            bufferedWriter.write("Время завершения: $timestamp\n")
+            val totalElapsed = completionTimes.values.lastOrNull()?.let { last ->
+                last - calculationStartedAt
+            } ?: 0L
+            bufferedWriter.write("Общее время работы: ${formatDuration(totalElapsed)}\n")
+            val lastItem = currentPlanItems.lastOrNull()
+            if (lastItem != null) {
+                bufferedWriter.write("Конечный остаток на цементных весах: ${format(lastItem.targetWeight)} кг\n")
+            }
+            bufferedWriter.write("==================================================\n\n")
+            bufferedWriter.close()
+            
+            Toast.makeText(this, "Сессия замесов завершена. Лог-файл закрыт.", Toast.LENGTH_SHORT).show()
+            saveLogToDownloads(file)
+            currentLogFile = null
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    private fun shareLogFile() {
+        val fileToShare = lastLogFile ?: currentLogFile
+        if (fileToShare == null || !fileToShare.exists()) {
+            Toast.makeText(this, "Нет файла лога для отправки", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        saveLogToDownloads(fileToShare)
+
+        try {
+            val uri = FileProvider.getUriForFile(
+                this,
+                "com.pc.cementmix.fileprovider",
+                fileToShare
+            )
+
+            val intent = Intent(Intent.ACTION_SEND).apply {
+                type = "text/plain"
+                putExtra(Intent.EXTRA_STREAM, uri)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            startActivity(Intent.createChooser(intent, "Поделиться логом"))
+        } catch (e: Exception) {
+            e.printStackTrace()
+            Toast.makeText(this, "Ошибка при отправке: ${e.message}", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun saveLogToDownloads(file: File) {
+        try {
+            val fileName = file.name
+            val resolver = contentResolver
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val contentValues = ContentValues().apply {
+                    put(MediaStore.MediaColumns.DISPLAY_NAME, fileName)
+                    put(MediaStore.MediaColumns.MIME_TYPE, "text/plain")
+                    put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+                }
+
+                val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, contentValues)
+                if (uri != null) {
+                    resolver.openOutputStream(uri)?.use { outputStream ->
+                        file.inputStream().use { inputStream ->
+                            inputStream.copyTo(outputStream)
+                        }
+                    }
+                    Toast.makeText(this, "Сохранено в Загрузки: $fileName", Toast.LENGTH_LONG).show()
+                } else {
+                    Toast.makeText(this, "Не удалось сохранить в Загрузки", Toast.LENGTH_SHORT).show()
+                }
+            } else {
+                val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+                if (!downloadsDir.exists()) {
+                    downloadsDir.mkdirs()
+                }
+                val destFile = File(downloadsDir, fileName)
+                file.inputStream().use { inputStream ->
+                    destFile.outputStream().use { outputStream ->
+                        inputStream.copyTo(outputStream)
+                    }
+                }
+                Toast.makeText(this, "Сохранено в Загрузки: ${destFile.absolutePath}", Toast.LENGTH_LONG).show()
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+            Toast.makeText(this, "Ошибка сохранения в Загрузки: ${e.message}", Toast.LENGTH_SHORT).show()
+        }
     }
 
     private fun updateTotalElapsedView() {
@@ -428,11 +765,22 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun toggleBatch(batchId: Int) {
+        val item = currentPlanItems.firstOrNull { it.id == batchId } ?: return
+        val completed: Boolean
         if (completionTimes.containsKey(batchId)) {
             completionTimes.remove(batchId)
+            completed = false
         } else {
             completionTimes[batchId] = System.currentTimeMillis()
+            completed = true
         }
+
+        logBatchEvent(item, completed)
+
+        if (batchId == currentPlanItems.size && completed) {
+            finishLogSession()
+        }
+
         renderBatchButtons()
     }
 
@@ -524,6 +872,13 @@ class MainActivity : AppCompatActivity() {
         ).toInt()
     }
 
+    private fun hideKeyboard() {
+        val view = currentFocus ?: binding.root
+        val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+        imm.hideSoftInputFromWindow(view.windowToken, 0)
+        view.clearFocus()
+    }
+
     companion object {
         private const val PREFS_NAME = "cement_mix_recipes"
         private const val KEY_LAST_GRADE = "last_grade"
@@ -531,6 +886,7 @@ class MainActivity : AppCompatActivity() {
         private const val DEFAULT_CEMENT_PER_FULL_BATCH = 120.0
         private const val FULL_BATCH_VOLUME = 0.5
         private const val EPSILON = 0.0001
+        private const val MAX_VISIBLE_BATCHES = 20
     }
 }
 
@@ -540,5 +896,16 @@ private data class BatchPlanItem(
     val volume: Double,
     val cumulativeVolume: Double,
     val cement: Double,
-    val isPartial: Boolean
+    val isPartial: Boolean,
+    val isAsh: Boolean = false,
+    val ash: Double = 0.0
+)
+
+private data class BatchItemViews(
+    val root: LinearLayout,
+    val button: MaterialButton,
+    val weightView: TextView,
+    val batchMetaView: TextView,
+    val volumeMetaView: TextView,
+    val timeView: TextView
 )

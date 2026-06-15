@@ -10,9 +10,13 @@
     <string name="action_save">Сохранить</string>
     <string name="recipe_hint">Кнопка сохраняет рецепт только для выбранной марки. Поле кг можно менять для разового перерасчёта без сохранения.</string>
     <string name="summary_title">Итог</string>
-    <string name="list_title">План по замесам</string>
+    <string name="list_title">20 отвесов</string>
+    <string name="panel_input_title">Ввод данных</string>
+    <string name="panel_output_title">Вывод</string>
     <string name="summary_waiting">Введите параметры и нажмите «Рассчитать».</string>
-    <string name="list_waiting">После расчёта здесь появятся кнопки с нужным весом для каждого замеса.</string>
+    <string name="list_waiting">Ниже 20 слотов под отвесы с нужным весом для каждого замеса.</string>
+    <string name="list_overflow_notice">Показаны первые 20 отвесов.</string>
+    <string name="slot_empty">Свободно</string>
     <string name="status_ready">Цемента хватает на все замесы</string>
     <string name="status_not_enough">Внимание: цемента не хватает</string>
     <string name="error_positive_number">Введите число больше нуля</string>
@@ -30,4 +34,11 @@
     <string name="elapsed_from_previous">С прошлого замеса: %1$s</string>
     <string name="elapsed_total">Итого: %1$s</string>
     <string name="total_elapsed_footer">Общее время по последнему отмеченному замесу: %1$s</string>
+    <string name="action_with_ash">С ЗОЛОЙ</string>
+    <string name="action_without_ash">БЕЗ ЗОЛЫ</string>
+    <string name="label_cement_batch">ЦЕМЕНТ: %1$s кг</string>
+    <string name="label_ash_batch">ЗОЛА: %1$s кг</string>
+    <string name="summary_ash_total">Использование золы: 18%% (%1$s кг)</string>
+    <string name="summary_ash_per_batch">Зола на замес: %1$s кг (%2$d отвесов)</string>
+    <string name="summary_cement_per_batch">Цемент на замес: %1$s кг (%2$d отвесов)</string>
 </resources>

@@ -215,23 +215,6 @@ class MainActivity : AppCompatActivity() {
         }
         val totalCycles = fullBatchCount + if (hasPartialBatch) 1 else 0
 
-        val totalCementRaw = safeCementPerBatch * fullBatchCount + partialCement
-        val totalAshRaw = if (useAsh) totalCementRaw * 0.18 else 0.0
-
-        val ashBatchesCount = if (useAsh) (1..totalCycles).count { isAshBatchIndex(it) } else 0
-        val cementBatchesCount = totalCycles - ashBatchesCount
-
-        val ashPerBatch = if (useAsh && ashBatchesCount > 0) ceilTo10(totalAshRaw / ashBatchesCount) else 0.0
-        val cementPerBatchFinal = if (useAsh) {
-            if (cementBatchesCount > 0) ceilTo10(totalCementRaw / cementBatchesCount) else 0.0
-        } else {
-            safeCementPerBatch
-        }
-
-        val totalCementUsed = if (useAsh) cementPerBatchFinal * cementBatchesCount else totalCementRaw
-        val finalWeight = safeStartWeight - totalCementUsed
-        val enoughCement = finalWeight >= 0.0
-
         currentPlanItems = buildPlanItems(
             startWeight = safeStartWeight,
             totalCycles = totalCycles,
@@ -251,29 +234,29 @@ class MainActivity : AppCompatActivity() {
         binding.batchCountHintView.text = getString(R.string.batch_count_formula, totalCycles)
         binding.totalElapsedView.visibility = View.GONE
 
+        val totalCementUsed = currentPlanItems.sumOf { it.cement }
+        val totalAshUsed = currentPlanItems.sumOf { it.ash }
+        val finalWeight = safeStartWeight - totalCementUsed
+        val enoughCement = finalWeight >= 0.0
+
+        val totalCementWithoutAsh = safeCementPerBatch * fullBatchCount + (if (hasPartialBatch) partialCement else 0.0)
+        val finalWeightWithoutAsh = safeStartWeight - totalCementWithoutAsh
+        val actualRatio = if (totalCementUsed > 0.0) (totalAshUsed / totalCementUsed) * 100.0 else 0.0
+
         binding.summaryView.text = buildString {
             appendLine("Марка: $grade")
+            appendLine("Общий объём: ${format(safeTotalVolume)} м3 (${describePlan(fullBatchCount, partialVolume)})")
             if (useAsh) {
-                appendLine(getString(R.string.summary_ash_total, format(totalAshRaw)))
-                appendLine(getString(R.string.summary_ash_per_batch, format(ashPerBatch), ashBatchesCount))
-                appendLine(getString(R.string.summary_cement_per_batch, format(cementPerBatchFinal), cementBatchesCount))
+                appendLine("Режим: С ЗОЛОЙ (Цемент -15% / Зола 18%)")
+                appendLine("Всего цемента: ${format(totalCementUsed)} кг (без золы: ${format(totalCementWithoutAsh)} кг)")
+                val ratioStr = String.format(Locale.getDefault(), "%,.1f", actualRatio)
+                appendLine("Всего золы: ${format(totalAshUsed)} кг (факт: $ratioStr% от цем.) (без золы: 0 кг)")
+                append("Остаток на весах: ${format(finalWeight)} кг (без золы: ${format(finalWeightWithoutAsh)} кг)")
             } else {
-                appendLine("Полный замес 0,5 м3: ${format(safeCementPerBatch)} кг цемента")
+                appendLine("Режим: БЕЗ ЗОЛЫ")
+                appendLine("Всего цемента: ${format(totalCementUsed)} кг")
+                append("Остаток на весах: ${format(finalWeight)} кг")
             }
-            appendLine("Общий объём: ${format(safeTotalVolume)} м3")
-            appendLine("План замесов: ${describePlan(fullBatchCount, partialVolume)}")
-            if (hasPartialBatch) {
-                appendLine("Догруз: ${format(partialVolume)} м3 = ${format(if (useAsh) 0.0 else partialCement)} кг")
-            }
-            appendLine("Всего циклов: $totalCycles")
-            if (useAsh) {
-                val totalAshUsed = ashPerBatch * ashBatchesCount
-                appendLine("Всего цемента нужно: ${format(totalCementUsed)} кг")
-                appendLine("Всего золы нужно: ${format(totalAshUsed)} кг")
-            } else {
-                appendLine("Всего цемента нужно: ${format(totalCementRaw)} кг")
-            }
-            append("Остаток после последнего замеса: ${format(finalWeight)} кг")
             if (currentPlanItems.size > MAX_VISIBLE_BATCHES) {
                 appendLine()
                 append(getString(R.string.list_overflow_notice))
@@ -298,41 +281,69 @@ class MainActivity : AppCompatActivity() {
         partialVolume: Double,
         partialCement: Double
     ): List<BatchPlanItem> {
-        val items = mutableListOf<BatchPlanItem>()
-        var currentWeight = startWeight
-
-        val totalCementRaw = cementPerFullBatch * (totalCycles - if (partialVolume > EPSILON) 1 else 0) + (if (partialVolume > EPSILON) partialCement else 0.0)
-        val totalAsh = if (useAsh) totalCementRaw * 0.18 else 0.0
-
-        val ashBatchesCount = if (useAsh) (1..totalCycles).count { isAshBatchIndex(it) } else 0
-        val cementBatchesCount = totalCycles - ashBatchesCount
-
-        val ashPerBatch = if (useAsh && ashBatchesCount > 0) ceilTo10(totalAsh / ashBatchesCount) else 0.0
-        val cementPerBatchFinal = if (useAsh) {
-            if (cementBatchesCount > 0) ceilTo10(totalCementRaw / cementBatchesCount) else 0.0
+        val hasPartialBatch = partialVolume > EPSILON
+        val fullBatchCount = totalCycles - if (hasPartialBatch) 1 else 0
+        
+        val totalCementRaw = if (useAsh) {
+            val reducedCementPerFullBatch = cementPerFullBatch * 0.85
+            val reducedCementPerPartial = partialCement * 0.85
+            reducedCementPerFullBatch * fullBatchCount + (if (hasPartialBatch) reducedCementPerPartial else 0.0)
         } else {
-            cementPerFullBatch
+            cementPerFullBatch * fullBatchCount + (if (hasPartialBatch) partialCement else 0.0)
+        }
+        
+        val totalAshRaw = if (useAsh) totalCementRaw * 0.18 else 0.0
+
+        var totalAshVolume = 0.0
+        var totalCementVolume = 0.0
+        
+        for (index in 1..totalCycles) {
+            val isPartial = index == totalCycles && hasPartialBatch
+            val volume = if (isPartial) partialVolume else FULL_BATCH_VOLUME
+            val isAsh = useAsh && isAshBatchIndex(index)
+            if (isAsh) {
+                totalAshVolume += volume
+            } else {
+                totalCementVolume += volume
+            }
         }
 
+        val items = mutableListOf<BatchPlanItem>()
+        var currentWeight = startWeight
+        
+        var cumAshVolume = 0.0
+        var cumCementVolume = 0.0
+        var prevCumAshRounded = 0.0
+        var prevCumCementRounded = 0.0
+        
         for (index in 1..totalCycles) {
-            val isPartial = index == totalCycles && partialVolume > EPSILON
-            val isAsh = useAsh && isAshBatchIndex(index)
+            val isPartial = index == totalCycles && hasPartialBatch
             val volume = if (isPartial) partialVolume else FULL_BATCH_VOLUME
-
-            val cementUsed = if (isAsh) {
-                0.0
+            val isAsh = useAsh && isAshBatchIndex(index)
+            
+            var cementUsed = 0.0
+            var ashUsed = 0.0
+            
+            if (isAsh) {
+                if (totalAshVolume > 0.0) {
+                    cumAshVolume += volume
+                    val cumAshRaw = totalAshRaw * (cumAshVolume / totalAshVolume)
+                    val cumAshRounded = roundTo10(cumAshRaw)
+                    ashUsed = cumAshRounded - prevCumAshRounded
+                    prevCumAshRounded = cumAshRounded
+                }
             } else {
-                if (useAsh) {
-                    cementPerBatchFinal
-                } else {
-                    if (isPartial) partialCement else cementPerFullBatch
+                if (totalCementVolume > 0.0) {
+                    cumCementVolume += volume
+                    val cumCementRaw = totalCementRaw * (cumCementVolume / totalCementVolume)
+                    val cumCementRounded = roundTo10(cumCementRaw)
+                    cementUsed = cumCementRounded - prevCumCementRounded
+                    prevCumCementRounded = cumCementRounded
                 }
             }
-
-            val ashUsed = if (isAsh) ashPerBatch else 0.0
-
+            
             currentWeight -= cementUsed
-
+            
             items += BatchPlanItem(
                 id = index,
                 targetWeight = currentWeight,
@@ -464,7 +475,7 @@ class MainActivity : AppCompatActivity() {
             ).apply {
                 rightMargin = dp(14)
             }
-            text = weightLabel(item.targetWeight)
+            text = if (item.isAsh) weightLabel(item.ash) else weightLabel(item.targetWeight)
             setTextColor(getColor(R.color.white))
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 28f)
             setTypeface(Typeface.DEFAULT_BOLD)
@@ -503,7 +514,7 @@ class MainActivity : AppCompatActivity() {
             visibility = View.GONE
         }
 
-        val textColor = if (item.isAsh) getColor(R.color.white) else getColor(R.color.text_secondary)
+        val textColor = getColor(R.color.white)
         batchMetaView.setTextColor(textColor)
         timeView.setTextColor(textColor)
         volumeMetaView.setTextColor(textColor)
@@ -536,13 +547,14 @@ class MainActivity : AppCompatActivity() {
         portraitMode: Boolean = false
     ) {
         val completedAt = completionTimes[item.id]
+        weightView.text = if (item.isAsh) weightLabel(item.ash) else weightLabel(item.targetWeight)
         
         val completedFillColor = if (item.isAsh) getColor(R.color.ash_completed_fill) else getColor(R.color.completed_fill)
         val completedStrokeColor = if (item.isAsh) getColor(R.color.ash_completed_stroke) else getColor(R.color.completed_stroke)
         val normalFillColor = if (item.isAsh) getColor(R.color.black) else getColor(R.color.primary)
         val normalStrokeColor = if (item.isAsh) getColor(R.color.black) else getColor(R.color.primary_dark)
         
-        val textColorNormal = if (item.isAsh) getColor(R.color.white) else getColor(R.color.text_secondary)
+        val textColorNormal = getColor(R.color.white)
         val textColorCompleted = if (item.isAsh) getColor(R.color.white) else getColor(R.color.text_primary)
 
         if (completedAt != null) {
@@ -581,9 +593,9 @@ class MainActivity : AppCompatActivity() {
             
             batchMetaView.visibility = View.VISIBLE
             if (item.isAsh) {
-                batchMetaView.text = getString(R.string.label_ash_batch, format(item.ash))
+                batchMetaView.text = getString(R.string.label_ash_batch)
             } else {
-                batchMetaView.text = getString(R.string.label_cement_batch, format(item.cement))
+                batchMetaView.text = getString(R.string.label_cement_batch)
             }
             batchMetaView.setTextColor(textColorNormal)
             
@@ -843,6 +855,8 @@ class MainActivity : AppCompatActivity() {
     private fun roundVolume(value: Double): Double = round(value * 100.0) / 100.0
 
     private fun ceilTo10(value: Double): Double = ceil(value / 10.0) * 10.0
+
+    private fun roundTo10(value: Double): Double = round(value / 10.0) * 10.0
 
     private fun selectedGrade(): String {
         val raw = binding.gradeInput.text?.toString()?.trim().orEmpty()

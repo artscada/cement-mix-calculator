@@ -36,8 +36,8 @@
     <string name="total_elapsed_footer">Общее время по последнему отмеченному замесу: %1$s</string>
     <string name="action_with_ash">С ЗОЛОЙ</string>
     <string name="action_without_ash">БЕЗ ЗОЛЫ</string>
-    <string name="label_cement_batch">ЦЕМЕНТ: %1$s кг</string>
-    <string name="label_ash_batch">ЗОЛА: %1$s кг</string>
+    <string name="label_cement_batch">ЦЕМЕНТ</string>
+    <string name="label_ash_batch">ЗОЛА</string>
     <string name="summary_ash_total">Использование золы: 18%% (%1$s кг)</string>
     <string name="summary_ash_per_batch">Зола на замес: %1$s кг (%2$d отвесов)</string>
     <string name="summary_cement_per_batch">Цемент на замес: %1$s кг (%2$d отвесов)</string>

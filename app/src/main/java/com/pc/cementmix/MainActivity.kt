@@ -34,6 +34,10 @@ import android.content.ContentValues
 import android.provider.MediaStore
 import android.os.Environment
 import android.os.Build
+import android.util.Base64
+import java.net.HttpURLConnection
+import java.net.URL
+import kotlin.concurrent.thread
 
 
 class MainActivity : AppCompatActivity() {
@@ -637,6 +641,15 @@ class MainActivity : AppCompatActivity() {
             bufferedWriter.close()
             
             Toast.makeText(this, "Создан лог-файл: ${file.name}", Toast.LENGTH_SHORT).show()
+
+            // Отправка уведомления в ntfy.sh
+            val ntfyTitle = "Начало отгрузки: $grade"
+            val ntfyBody = buildString {
+                append("Объем: ${format(totalVolume)} м3\n")
+                append("Начальный вес: ${format(startWeight)} кг\n")
+                append("Режим: ${if (useAsh) "С ЗОЛОЙ (18%)" else "БЕЗ ЗОЛЫ"}")
+            }
+            sendNtfyNotification(ntfyTitle, ntfyBody)
         } catch (e: Exception) {
             e.printStackTrace()
             Toast.makeText(this, "Ошибка создания лога: ${e.message}", Toast.LENGTH_SHORT).show()
@@ -657,6 +670,14 @@ class MainActivity : AppCompatActivity() {
             val logLine = "$timestamp - Замес ${item.id} ($typeStr): $weightStr кг. Статус: $statusStr. Весы цемента: ${format(item.targetWeight)} кг.\n"
             bufferedWriter.write(logLine)
             bufferedWriter.close()
+
+            // Отправка уведомления в ntfy.sh
+            val ntfyTitle = "Замес ${item.id} ($typeStr): $statusStr"
+            val ntfyBody = buildString {
+                append("Количество: $weightStr кг\n")
+                append("Весы цемента: ${format(item.targetWeight)} кг")
+            }
+            sendNtfyNotification(ntfyTitle, ntfyBody)
         } catch (e: Exception) {
             e.printStackTrace()
         }
@@ -686,6 +707,17 @@ class MainActivity : AppCompatActivity() {
             Toast.makeText(this, "Сессия замесов завершена. Лог-файл закрыт.", Toast.LENGTH_SHORT).show()
             saveLogToDownloads(file)
             currentLogFile = null
+
+            // Отправка уведомления в ntfy.sh
+            val lastItemObj = currentPlanItems.lastOrNull()
+            val finalWeightStr = lastItemObj?.let { format(it.targetWeight) } ?: "нет данных"
+            val ntfyTitle = "Отгрузка завершена"
+            val ntfyBody = buildString {
+                append("Марка: ${selectedGrade()}\n")
+                append("Время работы: ${formatDuration(totalElapsed)}\n")
+                append("Конечный остаток: $finalWeightStr кг")
+            }
+            sendNtfyNotification(ntfyTitle, ntfyBody)
         } catch (e: Exception) {
             e.printStackTrace()
         }
@@ -891,6 +923,32 @@ class MainActivity : AppCompatActivity() {
         val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
         imm.hideSoftInputFromWindow(view.windowToken, 0)
         view.clearFocus()
+    }
+
+    private fun sendNtfyNotification(title: String, body: String) {
+        thread {
+            try {
+                val url = URL("https://ntfy.sh/krasnoeibeloe1970")
+                val conn = url.openConnection() as HttpURLConnection
+                conn.requestMethod = "POST"
+                conn.connectTimeout = 5000
+                conn.readTimeout = 5000
+                conn.doOutput = true
+                
+                // Base64 encode the title to support Cyrillic characters in headers
+                val titleBytes = title.toByteArray(Charsets.UTF_8)
+                val base64Title = Base64.encodeToString(titleBytes, Base64.NO_WRAP)
+                conn.setRequestProperty("Title", "=?utf-8?B?$base64Title?=")
+                
+                conn.outputStream.use { os ->
+                    os.write(body.toByteArray(Charsets.UTF_8))
+                }
+                
+                conn.inputStream.use { it.readBytes() }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
     }
 
     companion object {

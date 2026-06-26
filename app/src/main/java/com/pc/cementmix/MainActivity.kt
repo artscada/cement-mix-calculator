@@ -811,10 +811,11 @@ class MainActivity : AppCompatActivity() {
     private fun sendCompletionNotification() {
         try {
             val carNumber = binding.carPlateInput.text?.toString()?.trim().orEmpty()
-            val ntfyTitle = if (carNumber.isNotEmpty()) "Итог отгрузки: Авто $carNumber" else "Итог отгрузки"
+            val ntfyTitle = if (carNumber.isNotEmpty()) "Итог: Авто $carNumber" else "Итог"
             val ntfyBody = buildString {
-                if (carNumber.isNotEmpty()) {
-                    append("Автомобиль: $carNumber\n\n")
+                val statusText = binding.statusView.text?.toString().orEmpty()
+                if (statusText.isNotEmpty()) {
+                    append(statusText).append("\n\n")
                 }
                 append(binding.summaryView.text?.toString().orEmpty())
             }

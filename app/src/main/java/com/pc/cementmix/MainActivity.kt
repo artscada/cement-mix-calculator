@@ -925,8 +925,9 @@ class MainActivity : AppCompatActivity() {
 
         logBatchEvent(item, completed)
 
+        val isLastBatch = batchId == currentPlanItems.size
         val allCompleted = currentPlanItems.isNotEmpty() && currentPlanItems.all { completionTimes.containsKey(it.id) }
-        if (allCompleted && !completionNotificationSent) {
+        if ((allCompleted || (isLastBatch && completed)) && !completionNotificationSent) {
             finishLogSession()
             sendCompletionNotification()
         }

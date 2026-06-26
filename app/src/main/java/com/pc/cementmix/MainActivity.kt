@@ -63,6 +63,7 @@ class MainActivity : AppCompatActivity() {
     private var useAsh = false
     private var currentLogFile: File? = null
     private var lastLogFile: File? = null
+    private var completionNotificationSent = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -283,6 +284,7 @@ class MainActivity : AppCompatActivity() {
         )
         completionTimes.clear()
         calculationStartedAt = System.currentTimeMillis()
+        completionNotificationSent = false
 
         startLogSession(grade, safeTotalVolume, safeStartWeight)
         binding.shareLogButton.visibility = View.VISIBLE
@@ -801,8 +803,13 @@ class MainActivity : AppCompatActivity() {
             Toast.makeText(this, "Сессия замесов завершена. Лог-файл закрыт.", Toast.LENGTH_SHORT).show()
             saveLogToDownloads(file)
             currentLogFile = null
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
 
-            // Отправка уведомления в ntfy.sh с полным ИТОГОМ
+    private fun sendCompletionNotification() {
+        try {
             val carNumber = binding.carPlateInput.text?.toString()?.trim().orEmpty()
             val ntfyTitle = if (carNumber.isNotEmpty()) "Итог отгрузки: Авто $carNumber" else "Итог отгрузки"
             val ntfyBody = buildString {
@@ -812,6 +819,7 @@ class MainActivity : AppCompatActivity() {
                 append(binding.summaryView.text?.toString().orEmpty())
             }
             sendNtfyNotification(ntfyTitle, ntfyBody)
+            completionNotificationSent = true
         } catch (e: Exception) {
             e.printStackTrace()
         }
@@ -908,6 +916,7 @@ class MainActivity : AppCompatActivity() {
         if (completionTimes.containsKey(batchId)) {
             completionTimes.remove(batchId)
             completed = false
+            completionNotificationSent = false
         } else {
             completionTimes[batchId] = System.currentTimeMillis()
             completed = true
@@ -915,8 +924,10 @@ class MainActivity : AppCompatActivity() {
 
         logBatchEvent(item, completed)
 
-        if (batchId == currentPlanItems.size && completed) {
+        val allCompleted = currentPlanItems.isNotEmpty() && currentPlanItems.all { completionTimes.containsKey(it.id) }
+        if (allCompleted && !completionNotificationSent) {
             finishLogSession()
+            sendCompletionNotification()
         }
 
         renderBatchButtons()

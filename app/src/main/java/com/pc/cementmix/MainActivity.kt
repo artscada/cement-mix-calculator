@@ -1053,19 +1053,25 @@ class MainActivity : AppCompatActivity() {
 
     private fun triggerQueueProcessor() {
         thread {
+            val linesToProcess = mutableListOf<String>()
             synchronized(queueFile) {
                 if (isProcessingQueue) return@thread
+                if (!queueFile.exists()) return@thread
+                
+                try {
+                    linesToProcess.addAll(queueFile.readLines())
+                    queueFile.delete()
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                    return@thread
+                }
                 isProcessingQueue = true
             }
-            try {
-                if (!queueFile.exists()) return@thread
-                val tempFile = File(filesDir, "ntfy_queue_temp.txt")
-                
-                val lines = queueFile.readLines()
-                val unsentLines = mutableListOf<String>()
-                
-                for (line in lines) {
-                    if (line.isBlank()) continue
+
+            val unsentLines = mutableListOf<String>()
+            for (line in linesToProcess) {
+                if (line.isBlank()) continue
+                try {
                     val obj = JSONObject(line)
                     val url = obj.getString("url")
                     val title = obj.getString("title")
@@ -1075,20 +1081,30 @@ class MainActivity : AppCompatActivity() {
                     if (!success) {
                         unsentLines.add(line)
                     }
+                } catch (e: Exception) {
+                    e.printStackTrace()
                 }
-                
-                if (unsentLines.isEmpty()) {
-                    queueFile.delete()
-                } else {
-                    tempFile.writeText(unsentLines.joinToString("\n") + "\n")
-                    tempFile.renameTo(queueFile)
+            }
+
+            var hasMoreToProcess = false
+            synchronized(queueFile) {
+                isProcessingQueue = false
+                if (unsentLines.isNotEmpty()) {
+                    try {
+                        val currentContent = if (queueFile.exists()) queueFile.readText() else ""
+                        val failedContent = unsentLines.joinToString("\n") + "\n"
+                        queueFile.writeText(failedContent + currentContent)
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
                 }
-            } catch (e: Exception) {
-                e.printStackTrace()
-            } finally {
-                synchronized(queueFile) {
-                    isProcessingQueue = false
+                if (queueFile.exists() && queueFile.length() > 0) {
+                    hasMoreToProcess = true
                 }
+            }
+
+            if (hasMoreToProcess) {
+                triggerQueueProcessor()
             }
         }
     }

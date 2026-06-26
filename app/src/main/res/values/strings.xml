@@ -2,6 +2,7 @@
     <string name="app_name">Цемент на замес</string>
     <string name="subtitle">Простой расчёт цемента и контроль показаний весов для каждого замеса.</string>
     <string name="label_grade">Марка</string>
+    <string name="label_car_plate">Номер автомобиля</string>
     <string name="label_cement_per_batch">Кг на 0,5 м3</string>
     <string name="label_total_volume">Общее количество, м3</string>
     <string name="label_batch_count">План замесов</string>

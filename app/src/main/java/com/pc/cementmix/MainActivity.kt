@@ -38,6 +38,9 @@ import android.util.Base64
 import java.net.HttpURLConnection
 import java.net.URL
 import kotlin.concurrent.thread
+import android.net.ConnectivityManager
+import android.net.Network
+import org.json.JSONObject
 
 
 class MainActivity : AppCompatActivity() {
@@ -66,11 +69,58 @@ class MainActivity : AppCompatActivity() {
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
+        setupCarPlateDropdown()
         setupGradeDropdown()
         setupDefaultValues()
         setupActions()
+        setupNetworkCallback()
+        startQueueRetryTimer()
 
         calculate()
+        triggerQueueProcessor()
+    }
+
+    private fun setupCarPlateDropdown() {
+        updateCarPlateAdapter()
+    }
+
+    private fun getCarPlatesHistory(): List<String> {
+        val raw = recipesPreferences.getString(KEY_CAR_PLATES_HISTORY, "") ?: ""
+        if (raw.isEmpty()) return emptyList()
+        return raw.split("|").filter { it.isNotEmpty() }
+    }
+
+    private fun saveCarPlateToHistory(plate: String) {
+        val trimmed = plate.trim()
+        if (trimmed.isEmpty()) return
+        val current = getCarPlatesHistory().toMutableList()
+        current.remove(trimmed)
+        current.add(0, trimmed)
+        if (current.size > 8) {
+            current.removeAt(current.size - 1)
+        }
+        recipesPreferences.edit().putString(KEY_CAR_PLATES_HISTORY, current.joinToString("|")).apply()
+        updateCarPlateAdapter()
+    }
+
+    private fun updateCarPlateAdapter() {
+        val history = getCarPlatesHistory()
+        val adapter = ArrayAdapter(this, android.R.layout.simple_list_item_1, history)
+        binding.carPlateInput.setAdapter(adapter)
+    }
+
+    private fun setupNetworkCallback() {
+        try {
+            val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+            cm.registerDefaultNetworkCallback(object : ConnectivityManager.NetworkCallback() {
+                override fun onAvailable(network: Network) {
+                    super.onAvailable(network)
+                    triggerQueueProcessor()
+                }
+            })
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
     }
 
     private fun setupGradeDropdown() {
@@ -170,6 +220,11 @@ class MainActivity : AppCompatActivity() {
 
     private fun calculate() {
         clearErrors()
+
+        val carNumber = binding.carPlateInput.text?.toString()?.trim().orEmpty()
+        if (carNumber.isNotEmpty()) {
+            saveCarPlateToHistory(carNumber)
+        }
 
         val grade = selectedGrade()
         val cementPerBatch = parseDouble(binding.cementPerBatchInput.text?.toString())
@@ -381,6 +436,7 @@ class MainActivity : AppCompatActivity() {
             bindBatchButton(
                 views.button,
                 views.weightView,
+                views.indexView,
                 views.batchMetaView,
                 views.volumeMetaView,
                 views.timeView,
@@ -425,6 +481,7 @@ class MainActivity : AppCompatActivity() {
             bindBatchButton(
                 views.button,
                 views.weightView,
+                views.indexView,
                 views.batchMetaView,
                 views.volumeMetaView,
                 views.timeView,
@@ -471,30 +528,35 @@ class MainActivity : AppCompatActivity() {
             setOnClickListener { toggleBatch(item.id) }
         }
 
-        val weightView = TextView(this).apply {
+        val contentLayout = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
             layoutParams = FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.WRAP_CONTENT,
-                FrameLayout.LayoutParams.WRAP_CONTENT,
-                Gravity.END or Gravity.CENTER_VERTICAL
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
             ).apply {
+                leftMargin = dp(14)
                 rightMargin = dp(14)
             }
-            text = if (item.isAsh) weightLabel(item.ash) else weightLabel(item.targetWeight)
-            setTextColor(getColor(R.color.white))
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 28f)
-            setTypeface(Typeface.DEFAULT_BOLD)
-            translationX = 0f
         }
 
-        val detailsContainer = LinearLayout(this).apply {
-            layoutParams = FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.WRAP_CONTENT,
-                FrameLayout.LayoutParams.WRAP_CONTENT,
-                Gravity.START or Gravity.CENTER_VERTICAL
+        val indexView = TextView(this).apply {
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
             ).apply {
-                leftMargin = dp(10)
-                rightMargin = dp(76)
+                rightMargin = dp(12)
             }
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 30f)
+            setTypeface(Typeface.DEFAULT_BOLD)
+            includeFontPadding = false
+        }
+
+        val innerDetailsContainer = LinearLayout(this).apply {
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
             orientation = LinearLayout.VERTICAL
         }
 
@@ -523,16 +585,39 @@ class MainActivity : AppCompatActivity() {
         timeView.setTextColor(textColor)
         volumeMetaView.setTextColor(textColor)
 
-        detailsContainer.addView(batchMetaView)
-        detailsContainer.addView(timeView)
-        detailsContainer.addView(volumeMetaView)
+        innerDetailsContainer.addView(batchMetaView)
+        innerDetailsContainer.addView(timeView)
+        innerDetailsContainer.addView(volumeMetaView)
+
+        val spacer = View(this).apply {
+            layoutParams = LinearLayout.LayoutParams(0, 1).apply {
+                weight = 1f
+            }
+        }
+
+        val weightView = TextView(this).apply {
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                leftMargin = dp(8)
+            }
+            text = if (item.isAsh) weightLabel(item.ash) else weightLabel(item.targetWeight)
+            setTextColor(getColor(R.color.white))
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 28f)
+            setTypeface(Typeface.DEFAULT_BOLD)
+        }
+
+        contentLayout.addView(indexView)
+        contentLayout.addView(innerDetailsContainer)
+        contentLayout.addView(spacer)
+        contentLayout.addView(weightView)
 
         buttonFrame.addView(button)
-        buttonFrame.addView(weightView)
-        buttonFrame.addView(detailsContainer)
+        buttonFrame.addView(contentLayout)
         root.addView(buttonFrame)
 
-        return BatchItemViews(root, button, weightView, batchMetaView, volumeMetaView, timeView)
+        return BatchItemViews(root, button, weightView, indexView, batchMetaView, volumeMetaView, timeView)
     }
 
     private fun shouldShowTwoColumns(): Boolean {
@@ -544,6 +629,7 @@ class MainActivity : AppCompatActivity() {
     private fun bindBatchButton(
         button: MaterialButton,
         weightView: TextView,
+        indexView: TextView,
         batchMetaView: TextView,
         volumeMetaView: TextView,
         timeView: TextView,
@@ -552,6 +638,7 @@ class MainActivity : AppCompatActivity() {
     ) {
         val completedAt = completionTimes[item.id]
         weightView.text = if (item.isAsh) weightLabel(item.ash) else weightLabel(item.targetWeight)
+        indexView.text = item.id.toString()
         
         val completedFillColor = if (item.isAsh) getColor(R.color.ash_completed_fill) else getColor(R.color.completed_fill)
         val completedStrokeColor = if (item.isAsh) getColor(R.color.ash_completed_stroke) else getColor(R.color.completed_stroke)
@@ -560,6 +647,11 @@ class MainActivity : AppCompatActivity() {
         
         val textColorNormal = getColor(R.color.white)
         val textColorCompleted = if (item.isAsh) getColor(R.color.white) else getColor(R.color.text_primary)
+
+        indexView.setTextColor(if (completedAt != null) textColorCompleted else textColorNormal)
+
+        val typeStr = if (item.isAsh) getString(R.string.label_ash_batch) else getString(R.string.label_cement_batch)
+        batchMetaView.text = typeStr
 
         if (completedAt != null) {
             button.alpha = if (item.isAsh) 0.6f else 0.7f
@@ -572,7 +664,6 @@ class MainActivity : AppCompatActivity() {
             weightView.translationX = 0f
             
             batchMetaView.visibility = View.VISIBLE
-            batchMetaView.text = getString(R.string.completed_batch_label, item.id)
             batchMetaView.setTextColor(textColorCompleted)
             
             volumeMetaView.visibility = View.VISIBLE
@@ -596,11 +687,6 @@ class MainActivity : AppCompatActivity() {
             weightView.translationX = 0f
             
             batchMetaView.visibility = View.VISIBLE
-            if (item.isAsh) {
-                batchMetaView.text = getString(R.string.label_ash_batch)
-            } else {
-                batchMetaView.text = getString(R.string.label_cement_batch)
-            }
             batchMetaView.setTextColor(textColorNormal)
             
             volumeMetaView.visibility = View.GONE
@@ -643,8 +729,12 @@ class MainActivity : AppCompatActivity() {
             Toast.makeText(this, "Создан лог-файл: ${file.name}", Toast.LENGTH_SHORT).show()
 
             // Отправка уведомления в ntfy.sh
-            val ntfyTitle = "Начало отгрузки: $grade"
+            val carNumber = binding.carPlateInput.text?.toString()?.trim().orEmpty()
+            val ntfyTitle = if (carNumber.isNotEmpty()) "Начало отгрузки: $grade (Авто $carNumber)" else "Начало отгрузки: $grade"
             val ntfyBody = buildString {
+                if (carNumber.isNotEmpty()) {
+                    append("Автомобиль: $carNumber\n")
+                }
                 append("Объем: ${format(totalVolume)} м3\n")
                 append("Начальный вес: ${format(startWeight)} кг\n")
                 append("Режим: ${if (useAsh) "С ЗОЛОЙ (18%)" else "БЕЗ ЗОЛЫ"}")
@@ -672,8 +762,12 @@ class MainActivity : AppCompatActivity() {
             bufferedWriter.close()
 
             // Отправка уведомления в ntfy.sh
-            val ntfyTitle = "Замес ${item.id} ($typeStr): $statusStr"
+            val carNumber = binding.carPlateInput.text?.toString()?.trim().orEmpty()
+            val ntfyTitle = if (carNumber.isNotEmpty()) "Замес ${item.id} ($typeStr): $statusStr (Авто $carNumber)" else "Замес ${item.id} ($typeStr): $statusStr"
             val ntfyBody = buildString {
+                if (carNumber.isNotEmpty()) {
+                    append("Автомобиль: $carNumber\n")
+                }
                 append("Количество: $weightStr кг\n")
                 append("Весы цемента: ${format(item.targetWeight)} кг")
             }
@@ -708,14 +802,14 @@ class MainActivity : AppCompatActivity() {
             saveLogToDownloads(file)
             currentLogFile = null
 
-            // Отправка уведомления в ntfy.sh
-            val lastItemObj = currentPlanItems.lastOrNull()
-            val finalWeightStr = lastItemObj?.let { format(it.targetWeight) } ?: "нет данных"
-            val ntfyTitle = "Отгрузка завершена"
+            // Отправка уведомления в ntfy.sh с полным ИТОГОМ
+            val carNumber = binding.carPlateInput.text?.toString()?.trim().orEmpty()
+            val ntfyTitle = if (carNumber.isNotEmpty()) "Итог отгрузки: Авто $carNumber" else "Итог отгрузки"
             val ntfyBody = buildString {
-                append("Марка: ${selectedGrade()}\n")
-                append("Время работы: ${formatDuration(totalElapsed)}\n")
-                append("Конечный остаток: $finalWeightStr кг")
+                if (carNumber.isNotEmpty()) {
+                    append("Автомобиль: $carNumber\n\n")
+                }
+                append(binding.summaryView.text?.toString().orEmpty())
             }
             sendNtfyNotification(ntfyTitle, ntfyBody)
         } catch (e: Exception) {
@@ -925,28 +1019,111 @@ class MainActivity : AppCompatActivity() {
         view.clearFocus()
     }
 
-    private fun sendNtfyNotification(title: String, body: String) {
-        thread {
+    private val queueFile by lazy { File(filesDir, "ntfy_queue.txt") }
+    private var isProcessingQueue = false
+
+    private fun queueNotification(url: String, title: String, body: String) {
+        synchronized(queueFile) {
             try {
-                val url = URL("https://ntfy.sh/krasnoeibeloe1970")
-                val conn = url.openConnection() as HttpURLConnection
-                conn.requestMethod = "POST"
-                conn.connectTimeout = 5000
-                conn.readTimeout = 5000
-                conn.doOutput = true
-                
-                // Base64 encode the title to support Cyrillic characters in headers
-                val titleBytes = title.toByteArray(Charsets.UTF_8)
-                val base64Title = Base64.encodeToString(titleBytes, Base64.NO_WRAP)
-                conn.setRequestProperty("Title", "=?utf-8?B?$base64Title?=")
-                
-                conn.outputStream.use { os ->
-                    os.write(body.toByteArray(Charsets.UTF_8))
-                }
-                
-                conn.inputStream.use { it.readBytes() }
+                val line = JSONObject().apply {
+                    put("url", url)
+                    put("title", title)
+                    put("body", body)
+                }.toString() + "\n"
+                queueFile.appendText(line)
             } catch (e: Exception) {
                 e.printStackTrace()
+            }
+        }
+        triggerQueueProcessor()
+    }
+
+    private fun triggerQueueProcessor() {
+        thread {
+            synchronized(queueFile) {
+                if (isProcessingQueue) return@thread
+                isProcessingQueue = true
+            }
+            try {
+                if (!queueFile.exists()) return@thread
+                val tempFile = File(filesDir, "ntfy_queue_temp.txt")
+                
+                val lines = queueFile.readLines()
+                val unsentLines = mutableListOf<String>()
+                
+                for (line in lines) {
+                    if (line.isBlank()) continue
+                    val obj = JSONObject(line)
+                    val url = obj.getString("url")
+                    val title = obj.getString("title")
+                    val body = obj.getString("body")
+                    
+                    val success = sendToUrlSync(url, title, body)
+                    if (!success) {
+                        unsentLines.add(line)
+                    }
+                }
+                
+                if (unsentLines.isEmpty()) {
+                    queueFile.delete()
+                } else {
+                    tempFile.writeText(unsentLines.joinToString("\n") + "\n")
+                    tempFile.renameTo(queueFile)
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            } finally {
+                synchronized(queueFile) {
+                    isProcessingQueue = false
+                }
+            }
+        }
+    }
+
+    private fun sendToUrlSync(urlStr: String, title: String, body: String): Boolean {
+        return try {
+            val url = URL(urlStr)
+            val conn = url.openConnection() as HttpURLConnection
+            conn.requestMethod = "POST"
+            conn.connectTimeout = 5000
+            conn.readTimeout = 5000
+            conn.doOutput = true
+            
+            val titleBytes = title.toByteArray(Charsets.UTF_8)
+            val base64Title = Base64.encodeToString(titleBytes, Base64.NO_WRAP)
+            conn.setRequestProperty("Title", "=?utf-8?B?$base64Title?=")
+            
+            conn.outputStream.use { os ->
+                os.write(body.toByteArray(Charsets.UTF_8))
+            }
+            
+            conn.inputStream.use { it.readBytes() }
+            conn.responseCode == 200
+        } catch (e: Exception) {
+            e.printStackTrace()
+            false
+        }
+    }
+
+    private fun sendNtfyNotification(title: String, body: String) {
+        val urls = listOf(
+            "https://ntfy.sh/krasnoeibeloe1970",
+            "http://109.195.35.231:2586/krasnoeibeloe1970"
+        )
+        for (url in urls) {
+            queueNotification(url, title, body)
+        }
+    }
+
+    private fun startQueueRetryTimer() {
+        thread(isDaemon = true) {
+            while (true) {
+                try {
+                    Thread.sleep(60000)
+                    triggerQueueProcessor()
+                } catch (e: Exception) {
+                    // Ignore or exit loop if interrupted
+                }
             }
         }
     }
@@ -959,6 +1136,7 @@ class MainActivity : AppCompatActivity() {
         private const val FULL_BATCH_VOLUME = 0.5
         private const val EPSILON = 0.0001
         private const val MAX_VISIBLE_BATCHES = 20
+        private const val KEY_CAR_PLATES_HISTORY = "car_plates_history"
     }
 }
 
@@ -977,6 +1155,7 @@ private data class BatchItemViews(
     val root: LinearLayout,
     val button: MaterialButton,
     val weightView: TextView,
+    val indexView: TextView,
     val batchMetaView: TextView,
     val volumeMetaView: TextView,
     val timeView: TextView
